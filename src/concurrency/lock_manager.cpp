@@ -21,13 +21,21 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid) {
 
   std::unique_lock<std::mutex> lk(latch_);
   LockRequest lr(txn->GetTransactionId(),LockMode::SHARED);
-  if (lock_table_.count(rid)==0){
-    lock_table_[rid].request_queue_.push_back(lr);
-  }else{
+  lock_table_[rid].request_queue_.push_back(std::move(lr));
+  LockRequest *p;
+  lock_table_[rid].cv_.wait(lk,[&](){
+    for(auto iter=lock_table_[rid].request_queue_.begin();iter!=lock_table_[rid].request_queue_.end();iter++){
+      if (iter->txn_id_==txn->GetTransactionId()){
+        p=&(*iter);
+        return true;
+      }else if(iter->lock_mode_==LockMode::EXCLUSIVE){
+        return false;
+      }
+    }
+    return false;
 
-  }
-
-
+  });
+  p->granted_=true;
   return true;
 }
 
