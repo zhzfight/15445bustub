@@ -235,7 +235,9 @@ class Transaction {
    * Set the state of the transaction.
    * @param state new state
    */
-  inline void SetState(TransactionState state) { state_ = state; }
+  inline void SetState(TransactionState state) {
+    LOG_INFO("setstate %d",static_cast<int>(state));
+    state_ = state; }
 
   /** @return the previous LSN */
   inline lsn_t GetPrevLSN() { return prev_lsn_; }
