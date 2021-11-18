@@ -11,15 +11,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "concurrency/lock_manager.h"
-
+#include <set>
 #include <utility>
 #include <vector>
+#include "concurrency/transaction_manager.h"
 
 namespace bustub {
 
 bool LockManager::LockShared(Transaction *txn, const RID &rid) {
   std::unique_lock<std::mutex> lk(latch_);
-  if (txn->GetState()==TransactionState::SHRINKING){
+  if (txn->GetState() == TransactionState::SHRINKING) {
     txn->SetState(TransactionState::ABORTED);
     return false;
   }
@@ -50,9 +51,8 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid) {
 }
 
 bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
-
   std::unique_lock<std::mutex> lk(latch_);
-  if (txn->GetState()==TransactionState::SHRINKING){
+  if (txn->GetState() == TransactionState::SHRINKING) {
     txn->SetState(TransactionState::ABORTED);
     return false;
   }
@@ -80,7 +80,7 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
 bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
   // when i will upgrade the lock?
   std::unique_lock<std::mutex> lk(latch_);
-  if (txn->GetState()==TransactionState::SHRINKING||txn->GetState()==TransactionState::ABORTED){
+  if (txn->GetState() == TransactionState::SHRINKING || txn->GetState() == TransactionState::ABORTED) {
     return false;
   }
   if (lock_table_[rid].upgrading_) {
@@ -127,7 +127,7 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid) {
   if (iter == end) {
     return false;
   }
-  if (txn->GetState()!=TransactionState::ABORTED){
+  if (txn->GetState() != TransactionState::ABORTED) {
     txn->SetState(TransactionState::SHRINKING);
   }
   txn->GetSharedLockSet()->erase(rid);
@@ -136,13 +136,46 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid) {
   return true;
 }
 
-void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {}
+void LockManager::AddEdge(txn_id_t t1, txn_id_t t2) {
+  if (waits_for_.count(t1) == 0) {
+    LOG_INFO("add edge %d to %d", t1, t2);
+    waits_for_[t1].push_back(t2);
+    return;
+  }
+  if (std::find_if(waits_for_[t1].begin(), waits_for_[t1].end(), [&](txn_id_t t) { return t == t2; }) ==
+      waits_for_[t1].end()) {
+    LOG_INFO("add edge %d to %d", t1, t2);
+    waits_for_[t1].push_back(t2);
+  }
+}
 
-void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {}
+void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {
+  if (waits_for_.count(t1) == 0) {
+    LOG_INFO("no edge %d to %d", t1, t2);
+    return;
+  }
+  auto iter = std::find_if(waits_for_[t1].begin(), waits_for_[t1].end(), [&](txn_id_t t) { return t == t2; });
+  if (iter != waits_for_[t1].end()) {
+    LOG_INFO("remove %d to %d", t1, t2);
+    waits_for_[t1].erase(iter);
+    return;
+  }
+  LOG_INFO("no edge %d to %d", t1, t2);
+}
 
 bool LockManager::HasCycle(txn_id_t *txn_id) { return false; }
 
-std::vector<std::pair<txn_id_t, txn_id_t>> LockManager::GetEdgeList() { return {}; }
+std::vector<std::pair<txn_id_t, txn_id_t>> LockManager::GetEdgeList() {
+  std::vector<std::pair<txn_id_t ,txn_id_t >> edge_list;
+  for(auto p2ps:waits_for_){
+    for(auto to:p2ps.second){
+      edge_list.push_back({p2ps.first,to});
+    }
+  }
+  return edge_list;
+
+
+}
 
 void LockManager::RunCycleDetection() {
   while (enable_cycle_detection_) {
@@ -150,8 +183,35 @@ void LockManager::RunCycleDetection() {
     {
       std::unique_lock<std::mutex> l(latch_);
       // TODO(student): remove the continue and add your cycle detection and abort code here
-      continue;
+
+      // build the graph
+
+      for(auto iter=lock_table_.begin();iter!=lock_table_.end();iter++){
+
+        std::unordered_set<txn_id_t > hold_lock;
+        std::unordered_set<txn_id_t > wait_lock;
+        for(auto rlq_iter=iter->second.request_queue_.begin();rlq_iter!=iter->second.request_queue_.end();rlq_iter++){
+          if (rlq_iter->granted_){
+            hold_lock.insert(rlq_iter->txn_id_);
+          }else{
+            wait_lock.insert(rlq_iter->txn_id_);
+          }
+        }
+        for(auto from:wait_lock){
+          for(auto to:hold_lock){
+            AddEdge(from,to);
+
+          }
+        }
+      }
+      txn_id_t abort_txn_id;
+      while (HasCycle(&abort_txn_id)){
+        TransactionManager::GetTransaction(abort_txn_id)->SetState(TransactionState::ABORTED);
+      }
+
+
     }
+    waits_for_.clear();
   }
 }
 
