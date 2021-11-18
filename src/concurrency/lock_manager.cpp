@@ -163,18 +163,43 @@ void LockManager::RemoveEdge(txn_id_t t1, txn_id_t t2) {
   LOG_INFO("no edge %d to %d", t1, t2);
 }
 
-bool LockManager::HasCycle(txn_id_t *txn_id) { return false; }
+bool LockManager::dfs(txn_id_t cur, std::unordered_set<txn_id_t> &visited) {
+  visited.insert(cur);
+  while (!waits_for_[cur].empty()) {
+    auto lowest = std::min_element(waits_for_[cur].begin(), waits_for_[cur].end());
+    if (visited.count(*lowest) != 0) {
+      return true;
+    }
+    if (dfs(*lowest, visited)) {
+      return true;
+    }
+    RemoveEdge(cur, *lowest);
+  }
+  visited.erase(cur);
+  return false;
+}
+
+bool LockManager::HasCycle(txn_id_t *txn_id) {
+  std::unordered_set<txn_id_t> visited;
+  auto iter = vertex.begin();
+  if (dfs(*iter, visited)) {
+    auto youngest = std::max_element(visited.begin(), visited.end());
+    *txn_id = *youngest;
+    return true;
+  }
+  LOG_INFO("vertex erase %d", *vertex.begin());
+  vertex.erase(vertex.begin());
+  return false;
+}
 
 std::vector<std::pair<txn_id_t, txn_id_t>> LockManager::GetEdgeList() {
-  std::vector<std::pair<txn_id_t ,txn_id_t >> edge_list;
-  for(auto p2ps:waits_for_){
-    for(auto to:p2ps.second){
-      edge_list.push_back({p2ps.first,to});
+  std::vector<std::pair<txn_id_t, txn_id_t>> edge_list;
+  for (auto p2ps : waits_for_) {
+    for (auto to : p2ps.second) {
+      edge_list.push_back({p2ps.first, to});
     }
   }
   return edge_list;
-
-
 }
 
 void LockManager::RunCycleDetection() {
@@ -185,33 +210,48 @@ void LockManager::RunCycleDetection() {
       // TODO(student): remove the continue and add your cycle detection and abort code here
 
       // build the graph
-
-      for(auto iter=lock_table_.begin();iter!=lock_table_.end();iter++){
-
-        std::unordered_set<txn_id_t > hold_lock;
-        std::unordered_set<txn_id_t > wait_lock;
-        for(auto rlq_iter=iter->second.request_queue_.begin();rlq_iter!=iter->second.request_queue_.end();rlq_iter++){
-          if (rlq_iter->granted_){
+      LOG_INFO("build the graph");
+      for (auto iter = lock_table_.begin(); iter != lock_table_.end(); iter++) {
+        std::unordered_set<txn_id_t> hold_lock;
+        std::unordered_set<txn_id_t> wait_lock;
+        for (auto rlq_iter = iter->second.request_queue_.begin(); rlq_iter != iter->second.request_queue_.end();
+             rlq_iter++) {
+          if (rlq_iter->granted_) {
             hold_lock.insert(rlq_iter->txn_id_);
-          }else{
+          } else {
             wait_lock.insert(rlq_iter->txn_id_);
           }
         }
-        for(auto from:wait_lock){
-          for(auto to:hold_lock){
-            AddEdge(from,to);
-
+        for (auto from : wait_lock) {
+          for (auto to : hold_lock) {
+            if (TransactionManager::GetTransaction(from)->GetState() == TransactionState::ABORTED ||
+                TransactionManager::GetTransaction(to)->GetState() == TransactionState::ABORTED) {
+              continue;
+            }
+            AddEdge(from, to);
           }
         }
       }
-      txn_id_t abort_txn_id;
-      while (HasCycle(&abort_txn_id)){
-        TransactionManager::GetTransaction(abort_txn_id)->SetState(TransactionState::ABORTED);
+      LOG_INFO("graph finished");
+      for (auto iter = waits_for_.begin(); iter != waits_for_.end(); iter++) {
+        vertex.insert(iter->first);
       }
+      for (auto ver : vertex) {
+        LOG_INFO("%d", ver);
+      }
+      LOG_INFO("HERE");
+      txn_id_t abort_txn_id;
+      while (!vertex.empty() && HasCycle(&abort_txn_id)) {
+        LOG_INFO("has cycle");
+        TransactionManager::GetTransaction(abort_txn_id)->SetState(TransactionState::ABORTED);
 
 
+        waits_for_.erase(abort_txn_id);
+      }
+      LOG_INFO("HERE2");
     }
     waits_for_.clear();
+    vertex.clear();
   }
 }
 
