@@ -194,7 +194,7 @@ TEST(LockManagerTest, GraphEdgeTest) {
   }
 }
 
-TEST(LockManagerTest, DISABLED_BasicCycleTest) {
+TEST(LockManagerTest, BasicCycleTest) {
   LockManager lock_mgr{}; /* Use Deadlock detection */
   TransactionManager txn_mgr{&lock_mgr};
 
@@ -202,13 +202,15 @@ TEST(LockManagerTest, DISABLED_BasicCycleTest) {
   lock_mgr.AddEdge(0, 1);
   lock_mgr.AddEdge(1, 0);
   EXPECT_EQ(2, lock_mgr.GetEdgeList().size());
-
+  LOG_INFO("TEST ADD EDGE");
   txn_id_t txn;
   EXPECT_EQ(true, lock_mgr.HasCycle(&txn));
   EXPECT_EQ(1, txn);
 
+  LOG_INFO("HAS CYCLE TRUE");
   lock_mgr.RemoveEdge(1, 0);
   EXPECT_EQ(false, lock_mgr.HasCycle(&txn));
+  LOG_INFO("REMOVE EDGE");
 }
 
 TEST(LockManagerTest, BasicDeadlockDetectionTest) {

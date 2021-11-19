@@ -222,6 +222,16 @@ class Transaction {
   /** @return the set of resources under an exclusive lock */
   inline std::shared_ptr<std::unordered_set<RID>> GetExclusiveLockSet() { return exclusive_lock_set_; }
 
+  /** @return the lock now waiting */
+  inline RID GetWaitRID(){return waiting_rid_;}
+
+  /** */
+  inline void SetWaitRID(const RID &rid){
+    LOG_INFO("set wait");
+    waiting_rid_.Set(rid.GetPageId(),rid.GetSlotNum());
+    LOG_INFO("set done");
+  }
+
   /** @return true if rid is shared locked by this transaction */
   bool IsSharedLocked(const RID &rid) { return shared_lock_set_->find(rid) != shared_lock_set_->end(); }
 
@@ -274,6 +284,10 @@ class Transaction {
   std::shared_ptr<std::unordered_set<RID>> shared_lock_set_;
   /** LockManager: the set of exclusive-locked tuples held by this transaction. */
   std::shared_ptr<std::unordered_set<RID>> exclusive_lock_set_;
+  /** waiting rid */
+  RID waiting_rid_;
+
+
 };
 
 }  // namespace bustub

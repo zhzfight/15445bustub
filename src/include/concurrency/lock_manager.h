@@ -18,6 +18,7 @@
 #include <memory>
 #include <mutex>  // NOLINT
 #include <unordered_map>
+#include <map>
 #include <utility>
 #include <vector>
 #include <set>
@@ -142,9 +143,7 @@ class LockManager {
   /** Lock table for lock requests. */
   std::unordered_map<RID, LockRequestQueue> lock_table_;
   /** Waits-for graph representation. */
-  std::unordered_map<txn_id_t, std::vector<txn_id_t>> waits_for_;
-  /** vertex of graph. */
-  std::set<txn_id_t > vertex;
+  std::map<txn_id_t, std::vector<txn_id_t>> waits_for_;
 };
 
 }  // namespace bustub

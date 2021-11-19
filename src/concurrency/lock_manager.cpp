@@ -22,12 +22,13 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid) {
   std::unique_lock<std::mutex> lk(latch_);
   if (txn->GetState() == TransactionState::SHRINKING) {
     txn->SetState(TransactionState::ABORTED);
-    return false;
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::LOCK_ON_SHRINKING);
   }
 
   LockRequest lr(txn->GetTransactionId(), LockMode::SHARED);
   lock_table_[rid].request_queue_.push_back(lr);
   LockRequest *p;
+  txn->SetWaitRID(rid);
   lock_table_[rid].cv_.wait(lk, [&]() {
     if (txn->GetState() == TransactionState::ABORTED) {
       return true;
@@ -43,7 +44,7 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid) {
     return false;
   });
   if (txn->GetState() == TransactionState::ABORTED) {
-    return false;
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::DEADLOCK);
   }
   txn->GetSharedLockSet()->emplace(rid);
   p->granted_ = true;
@@ -54,11 +55,11 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
   std::unique_lock<std::mutex> lk(latch_);
   if (txn->GetState() == TransactionState::SHRINKING) {
     txn->SetState(TransactionState::ABORTED);
-    return false;
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::LOCK_ON_SHRINKING);
   }
   LockRequest lr(txn->GetTransactionId(), LockMode::EXCLUSIVE);
   lock_table_[rid].request_queue_.push_back(lr);
-
+  txn->SetWaitRID(rid);
   lock_table_[rid].cv_.wait(lk, [&]() {
     if (txn->GetState() == TransactionState::ABORTED) {
       return true;
@@ -70,7 +71,8 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
     return true;
   });
   if (txn->GetState() == TransactionState::ABORTED) {
-    return false;
+
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::DEADLOCK);
   }
   txn->GetExclusiveLockSet()->emplace(rid);
   lock_table_[rid].request_queue_.begin()->granted_ = true;
@@ -80,8 +82,9 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
 bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
   // when i will upgrade the lock?
   std::unique_lock<std::mutex> lk(latch_);
-  if (txn->GetState() == TransactionState::SHRINKING || txn->GetState() == TransactionState::ABORTED) {
-    return false;
+  if (txn->GetState() == TransactionState::SHRINKING ) {
+    txn->SetState(TransactionState::ABORTED);
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::LOCK_ON_SHRINKING);
   }
   if (lock_table_[rid].upgrading_) {
     return false;
@@ -95,6 +98,7 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
     return lr.lock_mode_ == LockMode::EXCLUSIVE || lr.granted_ == false;
   });
   lock_table_[rid].request_queue_.splice(des_iter, lock_table_[rid].request_queue_, src_iter);
+  txn->SetWaitRID(rid);
   lock_table_[rid].cv_.wait(lk, [&]() {
     if (txn->GetState() == TransactionState::ABORTED) {
       return true;
@@ -106,7 +110,7 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
     return true;
   });
   if (txn->GetState() == TransactionState::ABORTED) {
-    return false;
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::DEADLOCK);
   }
   lock_table_[rid].request_queue_.begin()->granted_ = true;
   txn->GetSharedLockSet()->erase(rid);
@@ -115,7 +119,9 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
 }
 
 bool LockManager::Unlock(Transaction *txn, const RID &rid) {
+  LOG_INFO("unlock");
   std::unique_lock<std::mutex> lk(latch_);
+  LOG_INFO("get table lock");
   auto iter = lock_table_[rid].request_queue_.begin();
   auto end = lock_table_[rid].request_queue_.end();
   for (; iter != end; iter++) {
@@ -133,6 +139,7 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid) {
   txn->GetSharedLockSet()->erase(rid);
   txn->GetExclusiveLockSet()->erase(rid);
   lock_table_[rid].cv_.notify_all();
+  LOG_INFO("%d unlock rid %s",txn->GetTransactionId(),rid.ToString().c_str());
   return true;
 }
 
@@ -180,15 +187,18 @@ bool LockManager::dfs(txn_id_t cur, std::unordered_set<txn_id_t> &visited) {
 }
 
 bool LockManager::HasCycle(txn_id_t *txn_id) {
+  if (waits_for_.empty()){
+    return false;
+  }
   std::unordered_set<txn_id_t> visited;
-  auto iter = vertex.begin();
-  if (dfs(*iter, visited)) {
+  auto vertex = waits_for_.begin()->first;
+  if (dfs(vertex, visited)) {
     auto youngest = std::max_element(visited.begin(), visited.end());
     *txn_id = *youngest;
     return true;
   }
-  LOG_INFO("vertex erase %d", *vertex.begin());
-  vertex.erase(vertex.begin());
+  LOG_INFO("vertex erase %d", vertex);
+  waits_for_.erase(waits_for_.begin());
   return false;
 }
 
@@ -232,26 +242,23 @@ void LockManager::RunCycleDetection() {
           }
         }
       }
+
       LOG_INFO("graph finished");
-      for (auto iter = waits_for_.begin(); iter != waits_for_.end(); iter++) {
-        vertex.insert(iter->first);
-      }
-      for (auto ver : vertex) {
-        LOG_INFO("%d", ver);
-      }
-      LOG_INFO("HERE");
+
+
       txn_id_t abort_txn_id;
-      while (!vertex.empty() && HasCycle(&abort_txn_id)) {
+      while (HasCycle(&abort_txn_id)) {
         LOG_INFO("has cycle");
-        TransactionManager::GetTransaction(abort_txn_id)->SetState(TransactionState::ABORTED);
-
-
+        Transaction *txn = TransactionManager::GetTransaction(abort_txn_id);
+        txn->SetState(TransactionState::ABORTED);
+        lock_table_[txn->GetWaitRID()].cv_.notify_all();
         waits_for_.erase(abort_txn_id);
       }
+
+
       LOG_INFO("HERE2");
     }
     waits_for_.clear();
-    vertex.clear();
   }
 }
 
