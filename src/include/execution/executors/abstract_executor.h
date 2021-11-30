@@ -50,6 +50,34 @@ class AbstractExecutor {
   /** @return the executor context in which this executor runs */
   ExecutorContext *GetExecutorContext() { return exec_ctx_; }
 
+  bool TryExclusiveLock(const RID &rid) {
+    if (GetExecutorContext()->GetTransaction()->GetExclusiveLockSet()->count(rid) != 0) {
+      return true;
+    }
+    if (GetExecutorContext()->GetTransaction()->GetSharedLockSet()->count(rid) != 0) {
+      return GetExecutorContext()->GetLockManager()->LockUpgrade(GetExecutorContext()->GetTransaction(), rid);
+    }
+    return GetExecutorContext()->GetLockManager()->LockExclusive(GetExecutorContext()->GetTransaction(), rid);
+  }
+
+  bool TryShardLock(const RID &rid) {
+    if (GetExecutorContext()->GetTransaction()->GetExclusiveLockSet()->count(rid) != 0) {
+      return true;
+    }
+    if (GetExecutorContext()->GetTransaction()->GetIsolationLevel() == IsolationLevel::READ_UNCOMMITTED) {
+      throw TransactionAbortException(GetExecutorContext()->GetTransaction()->GetTransactionId(),
+                                      AbortReason::LOCKSHARED_ON_READ_UNCOMMITTED);
+    }
+    if (GetExecutorContext()->GetTransaction()->GetSharedLockSet()->count(rid) != 0) {
+      return true;
+    }
+    return GetExecutorContext()->GetLockManager()->LockShared(GetExecutorContext()->GetTransaction(), rid);
+  }
+  bool Unlock(const RID &rid){
+    return GetExecutorContext()->GetLockManager()->Unlock(GetExecutorContext()->GetTransaction(),rid);
+  }
+
+
  protected:
   ExecutorContext *exec_ctx_;
 };

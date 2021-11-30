@@ -42,14 +42,32 @@ class ExecutionEngine {
     try {
       Tuple tuple;
       RID rid;
+
       while (executor->Next(&tuple, &rid)) {
 
         if (result_set != nullptr) {
           result_set->push_back(tuple);
         }
+        if (exec_ctx->GetTransaction()->GetIsolationLevel()==IsolationLevel::READ_COMMITTED){
+          executor->Unlock(rid);
+        }
       }
+      if (exec_ctx->GetTransaction()->GetIsolationLevel()==IsolationLevel::REPEATABLE_READ){
+        for(auto iter=exec_ctx->GetTransaction()->GetSharedLockSet()->begin();iter!=exec_ctx->GetTransaction()->GetSharedLockSet()->end();){
+          executor->Unlock(*iter++);
+        }
+        for(auto iter=exec_ctx->GetTransaction()->GetExclusiveLockSet()->begin();iter!=exec_ctx->GetTransaction()->GetExclusiveLockSet()->end();){
+          executor->Unlock(*iter++);
+        }
+      }
+
+
+
+
+
     } catch (Exception &e) {
       // TODO(student): handle exceptions
+
     }
     LOG_INFO("HERE2");
     return true;

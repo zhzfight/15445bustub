@@ -87,7 +87,7 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
     throw TransactionAbortException(txn->GetTransactionId(),AbortReason::LOCK_ON_SHRINKING);
   }
   if (lock_table_[rid].upgrading_) {
-    return false;
+    throw TransactionAbortException(txn->GetTransactionId(),AbortReason::UPGRADE_CONFLICT);
   }
   lock_table_[rid].upgrading_ = true;
   auto src_iter = std::find_if(lock_table_[rid].request_queue_.begin(), lock_table_[rid].request_queue_.end(),
@@ -119,6 +119,10 @@ bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
 }
 
 bool LockManager::Unlock(Transaction *txn, const RID &rid) {
+  if (txn->GetIsolationLevel()==IsolationLevel::READ_UNCOMMITTED){
+    return true;
+  }
+
   LOG_INFO("unlock");
   std::unique_lock<std::mutex> lk(latch_);
   LOG_INFO("get table lock");

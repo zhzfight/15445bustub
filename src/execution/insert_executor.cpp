@@ -45,6 +45,7 @@ void InsertExecutor::Init() {
     child_executor_->Init();
 
     while(child_executor_->Next(&tuple, &rid)){
+      TryExclusiveLock(rid);
       bool ok=table_heap->InsertTuple(tuple,&rid,exec_ctx_->GetTransaction());
       if (!ok){
         throw "out of table pagesize";

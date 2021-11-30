@@ -32,9 +32,11 @@ bool SeqScanExecutor::Next(Tuple *tuple, RID *rid) {
   Value ok(BOOLEAN, 1);
 
   do {
-    LOG_INFO("HERE789");
+    if (GetExecutorContext()->GetTransaction()->GetIsolationLevel()!=IsolationLevel::READ_UNCOMMITTED){
+      TryShardLock(iter->GetRid());
+    }
     *tuple = *iter++;
-    LOG_INFO("HERE789");
+
     if (plan_->GetPredicate() != nullptr) {
       ok = plan_->GetPredicate()->Evaluate(tuple, plan_->OutputSchema());
     }
